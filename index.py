@@ -7,7 +7,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from bottle import route, run, template, post, request, static_file
-
+# 🔒 FIX A02: se usa bcrypt para hashing/verificación de contraseñas
+import bcrypt
 
 
 def loadDatabaseSettings(pathjs):
@@ -73,7 +74,14 @@ def Registro():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			cursor.execute(f'insert into Usuario values(null,"{request.json["uname"]}","{request.json["email"]}",md5("{request.json["password"]}"))');
+			# 🔒 FIX A02: usar bcrypt para hashear la contraseña y consultas parametrizadas
+			uname = request.json["uname"]
+			email = request.json["email"]
+			password = request.json["password"]
+			# generar hash seguro con bcrypt
+			hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+			# insertar usando parámetros para evitar inyección (además de reemplazar MD5)
+			cursor.execute("INSERT INTO Usuario (uname, email, password) VALUES (%s, %s, %s)", (uname, email, hashed))
 			R = cursor.lastrowid
 			db.commit()
 		db.close()
@@ -121,18 +129,32 @@ def Login():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			print(f'Select id from  Usuario where uname ="{request.json["uname"]}" and password = md5("{request.json["password"]}")')
-			cursor.execute(f'Select id from  Usuario where uname ="{request.json["uname"]}" and password = md5("{request.json["password"]}")');
+			# 🔒 FIX A02: obtener hash desde BD y verificar con bcrypt (no usar md5 en la query)
+			uname = request.json["uname"]
+			password = request.json["password"]
+			# No imprimir contraseñas en logs
+			print(f'Select id and password from Usuario where uname = %s', uname)
+			cursor.execute("SELECT id, password FROM Usuario WHERE uname = %s", (uname,))
 			R = cursor.fetchall()
+			# verificar que exista usuario y que la contraseña coincida usando bcrypt
+			if not R:
+				# usuario no encontrado
+				db.close()
+				return {"R": -3}
+			# R[0][1] es el hash almacenado
+			stored_hash = R[0][1]
+			# comprobar con bcrypt
+			if not bcrypt.checkpw(password.encode(), stored_hash.encode()):
+				db.close()
+				return {"R": -3}
 	except Exception as e: 
 		print(e)
 		db.close()
 		return {"R":-2}
 	
 	
-	if not R:
-		db.close()
-		return {"R":-3}
+	# en adelante se usa el id del usuario verificado
+	user_id = R[0][0]
 	
 	T = getToken();
 	#file_put_contents('/tmp/log','insert into AccesoToken values('.R[0].',"'.T.'",now())');
@@ -143,8 +165,9 @@ def Login():
 	
 	try:
 		with db.cursor() as cursor:
-			cursor.execute(f'Delete from AccesoToken where id_Usuario = "{R[0][0]}"');
-			cursor.execute(f'insert into AccesoToken values({R[0][0]},"{T}",now())');
+			# 🔒 FIX A02: usar parámetros para las consultas de AccesoToken aquí también (evita concatenación)
+			cursor.execute("Delete from AccesoToken where id_Usuario = %s", (user_id,))
+			cursor.execute("insert into AccesoToken (id_Usuario, token, fecha) values (%s, %s, now())", (user_id, T))
 			db.commit()
 			db.close()
 			return {"R":0,"D":T}
