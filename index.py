@@ -258,7 +258,8 @@ def Imagen():
 		print(e)
 		db.close()
 		return {"R":-3}
-	
+
+
 """
 /*
  * Este Registro recibe un JSON con el siguiente formato
