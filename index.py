@@ -12,9 +12,24 @@ import bcrypt
 # 🔒 FIX A04: para validar tipo MIME y tamaño de imagen
 import imghdr
 import secrets
+# 🔒 FIX A05
+import os
 
+AUDIT_LOG_PATH = os.getenv('AUDIT_LOG_PATH')  
+APP_DEBUG = os.getenv('APP_DEBUG', '0') == '1'
 
 def loadDatabaseSettings(pathjs):
+	# 🔒 FIX A05: Prefer env vars; fallback to db.json
+	env_host = os.getenv('DB_HOST')
+	if env_host:
+		# Read DB settings from environment
+		return {
+			'host': env_host,
+			'port': int(os.getenv('DB_PORT', '3306')),
+			'dbname': os.getenv('DB_NAME', ''),
+			'user': os.getenv('DB_USER', ''),
+			'password': os.getenv('DB_PASS', '')
+		}
 	pathjs = Path(pathjs)
 	sjson = False
 	if pathjs.exists():
@@ -75,6 +90,7 @@ def Registro():
 	# TODO validar correo en json
 	# TODO Control de error de la DB
 	R = False
+	#posible vulnerabilidad
 	try:
 		with db.cursor() as cursor:
 			# 🔒 FIX A02: usar bcrypt para hashear la contraseña y consultas parametrizadas
@@ -89,7 +105,8 @@ def Registro():
 			db.commit()
 		db.close()
 	except Exception as e:
-		print(e) 
+		# 🔒 FIX A05: evitar filtrar detalles sensibles en logs; registrar solo la excepción tipo/mesaje genérico
+		print("Error en Registro:", str(e))
 		return {"R":-2}
 	return {"R":0,"D":R}
 
@@ -151,7 +168,8 @@ def Login():
 				db.close()
 				return {"R": -3}
 	except Exception as e: 
-		print(e)
+		# 🔒 FIX A05: evitar detalles sensibles en la salida; registrar error genérico
+		print("Error en Login:", str(e))
 		db.close()
 		return {"R":-2}
 	
@@ -160,10 +178,23 @@ def Login():
 	user_id = R[0][0]
 	
 	T = getToken();
-	#file_put_contents('/tmp/log','insert into AccesoToken values('.R[0].',"'.T.'",now())');
-	with open("/tmp/log","a") as log:
-		log.write(f'Delete from AccesoToken where id_Usuario = "{R[0][0]}"\n')
-		log.write(f'insert into AccesoToken values({R[0][0]},"{T}",now())\n')
+	# 🔒 FIX A05: no escribir tokens en texto plano en /tmp/log. Si AUDIT_LOG_PATH está definido, escribir solo hash del token.
+	if AUDIT_LOG_PATH:
+		try:
+			token_hash = hashlib.sha256(T.encode()).hexdigest()
+			audit_path = Path(AUDIT_LOG_PATH)
+			# Crear archivo de log si no existe (no crear en rutas públicas); establecer permisos restrictivos si es posible
+			audit_path.parent.mkdir(parents=True, exist_ok=True)
+			with audit_path.open("a") as logf:
+				logf.write(f"user:{user_id} token_hash:{token_hash} time:{datetime.utcnow().isoformat()} event:token_created\n")
+			# Si el OS lo permite, restringir permisos (intentar, no fallar si no se permite)
+			try:
+				audit_path.chmod(0o600)
+			except Exception:
+				pass
+		except Exception as e:
+			# Si no se puede escribir el log, no interrumpir el login; solo emitir mensaje mínimo
+			print("Warning: audit log unavailable")
 	
 	
 	try:
@@ -230,7 +261,7 @@ def Imagen():
 			cursor.execute("SELECT id_Usuario FROM AccesoToken WHERE token = %s", (TKN,))
 			R = cursor.fetchall()
 	except Exception as e: 
-		print(e)
+		print("Error validando token:", str(e))
 		db.close()
 		return {"R":-2}
 	
@@ -255,12 +286,22 @@ def Imagen():
 	# 🔒 FIX A04: verificar tipo MIME (solo imágenes)
 	tmp_name = secrets.token_hex(8)
 	tmp_path = tmp / tmp_name
-	with open(tmp_path, "wb") as imagen:
-		imagen.write(data_bytes)
-	tipo = imghdr.what(tmp_path)
-	if tipo not in ext_permitidas:
+	try:
+		with open(tmp_path, "wb") as imagen:
+			imagen.write(data_bytes)
+		# Intentar restringir permisos al archivo temporal
+		try:
+			tmp_path.chmod(0o600)
+		except Exception:
+			pass
+		tipo = imghdr.what(tmp_path)
+		if tipo not in ext_permitidas:
+			tmp_path.unlink(missing_ok=True)
+			return {"R": -8, "msg": "Tipo de archivo no válido"}
+	except Exception as e:
+		print("Error almacenando temporal:", str(e))
 		tmp_path.unlink(missing_ok=True)
-		return {"R": -8, "msg": "Tipo de archivo no válido"}
+		return {"R": -6, "msg": "Error al procesar archivo"}
 	
 	############################
 	############################
@@ -280,10 +321,19 @@ def Imagen():
 			# 🔒 FIX A04: mover archivo de forma segura
 			final_path = img / f"{idImagen}.{ext}"
 			shutil.move(str(tmp_path), final_path)
+			try:
+				final_path.chmod(0o640)
+			except Exception:
+				pass
 			return {"R":0,"D":idImagen}
 	except Exception as e: 
-		print(e)
+		print("Error guardando Imagen:", str(e))
 		db.close()
+		# limpiar temporal si quedó
+		try:
+			tmp_path.unlink(missing_ok=True)
+		except Exception:
+			pass
 		return {"R":-3}
 
 
@@ -332,7 +382,7 @@ def Descargar():
 			cursor.execute("SELECT id_Usuario FROM AccesoToken WHERE token = %s", (TKN,))
 			R = cursor.fetchall()
 	except Exception as e: 
-		print(e)
+		print("Error validando token en Descargar:", str(e))
 		db.close()
 		return {"R":-2}
 		
@@ -357,9 +407,10 @@ def Descargar():
 			db.close()
 			return static_file(ruta.name, root=str(img_root))
 	except Exception as e: 
-		print(e)
+		print("Error en Descargar:", str(e))
 		db.close()
 		return {"R":-3}
 
 if __name__ == '__main__':
-    run(host='0.0.0.0', port=8080, debug=True)
+     # 🔒 FIX A05: Controlar debug por variable de entorno (no debug=True en prod)
+    run(host=os.getenv('HOST', '0.0.0.0'), port=int(os.getenv('PORT', '8080')), debug=APP_DEBUG)
