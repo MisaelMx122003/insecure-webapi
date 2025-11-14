@@ -1,6 +1,7 @@
 {
+	"host":"localhost",
 	"port":3306,
-	"dbname": "webapps",
+	"dbname": "azulp",
 	"user":"udbwebaps",
-	"password":"ku>;k8ND4CN4"
+	"password":"Password123"
 }
