@@ -282,11 +282,25 @@ def Descargar():
 	
 	
 	# Buscar imagen y enviarla
-	
+	# 🔒 FIX A01: verificar que la imagen pertenezca al usuario asociado al token
 	try:
 		with db.cursor() as cursor:
-			cursor.execute('Select name,ruta from  Imagen where id = '+str(idImagen));
-			R = cursor.fetchall()
+			id_usuario = R[0][0]
+			cursor.execute("SELECT name, ruta FROM Imagen WHERE id = %s AND id_Usuario = %s", (idImagen, id_usuario))
+			row = cursor.fetchone()
+			if not row:
+				db.close()
+				return {"R": -9, "msg": "No tienes permiso para acceder a esta imagen"}
+
+			img_root = Path('img').resolve()
+			ruta = Path(row[1]).resolve()
+			if not str(ruta).startswith(str(img_root)):
+				db.close()
+				return {"R": -10, "msg": "Ruta de imagen no permitida"}
+
+			print(Path("img").resolve(), ruta)
+			db.close()
+			return static_file(ruta.name, root=str(img_root))
 	except Exception as e: 
 		print(e)
 		db.close()
@@ -295,4 +309,4 @@ def Descargar():
 	return static_file(R[0][1],Path(".").resolve())
 
 if __name__ == '__main__':
-    run(host='localhost', port=8080, debug=True)
+    run(host='0.0.0.0', port=8080, debug=True)
