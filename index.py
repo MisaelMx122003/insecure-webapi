@@ -223,7 +223,8 @@ def Imagen():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			cursor.execute(f'select id_Usuario from AccesoToken where token = "{TKN}"');
+			# 🔒 FIX A03: usar query parametrizada para evitar SQL injection con token
+			cursor.execute("SELECT id_Usuario FROM AccesoToken WHERE token = %s", (TKN,))
 			R = cursor.fetchall()
 	except Exception as e: 
 		print(e)
@@ -240,11 +241,15 @@ def Imagen():
 	# Guardar info del archivo en la base de datos
 	try:
 		with db.cursor() as cursor:
-			cursor.execute(f'insert into Imagen values(null,"{request.json["name"]}","img/",{id_Usuario})');
-			cursor.execute('select max(id) as idImagen from Imagen where id_Usuario = '+str(id_Usuario));
+			# 🔒 FIX A03: insertar usando parámetros para evitar SQL injection
+			cursor.execute("INSERT INTO Imagen (name, ruta, id_Usuario) VALUES (%s, %s, %s)", (request.json["name"], "img/", id_Usuario))
+			# 🔒 FIX A03: seleccionar max(id) usando parámetros
+			cursor.execute("SELECT MAX(id) as idImagen FROM Imagen WHERE id_Usuario = %s", (id_Usuario,))
 			R = cursor.fetchall()
 			idImagen = R[0][0];
-			cursor.execute('update Imagen set ruta = "img/'+str(idImagen)+'.'+str(request.json['ext'])+'" where id = '+str(idImagen));
+			# 🔒 FIX A03: actualizar ruta usando parámetros (evitar concatenación en SQL)
+			new_ruta = "img/" + str(idImagen) + "." + str(request.json['ext'])
+			cursor.execute("UPDATE Imagen SET ruta = %s WHERE id = %s", (new_ruta, idImagen))
 			db.commit()
 			# Mover archivo a su nueva locacion
 			shutil.move('tmp/'+str(id_Usuario),'img/'+str(idImagen)+'.'+str(request.json['ext']))
@@ -295,7 +300,8 @@ def Descargar():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			cursor.execute('select id_Usuario from AccesoToken where token = "'+TKN+'"');
+			# 🔒 FIX A03: usar query parametrizada para evitar SQL injection con token
+			cursor.execute("SELECT id_Usuario FROM AccesoToken WHERE token = %s", (TKN,))
 			R = cursor.fetchall()
 	except Exception as e: 
 		print(e)
@@ -328,8 +334,6 @@ def Descargar():
 		print(e)
 		db.close()
 		return {"R":-3}
-	print(Path("img").resolve(),R[0][1])
-	return static_file(R[0][1],Path(".").resolve())
 
 if __name__ == '__main__':
     run(host='0.0.0.0', port=8080, debug=True)
