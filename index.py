@@ -9,6 +9,9 @@ from pathlib import Path
 from bottle import route, run, template, post, request, static_file
 # 🔒 FIX A02: se usa bcrypt para hashing/verificación de contraseñas
 import bcrypt
+# 🔒 FIX A04: para validar tipo MIME y tamaño de imagen
+import imghdr
+import secrets
 
 
 def loadDatabaseSettings(pathjs):
@@ -232,9 +235,32 @@ def Imagen():
 		return {"R":-2}
 	
 	
-	id_Usuario = R[0][0];
-	with open(f'tmp/{id_Usuario}',"wb") as imagen:
-		imagen.write(base64.b64decode(request.json['data'].encode()))
+	id_Usuario = R[0][0]
+
+	# 🔒 FIX A04: validar extensión segura
+	ext = request.json['ext'].lower()
+	ext_permitidas = ['jpg', 'jpeg', 'png', 'gif']
+	if ext not in ext_permitidas:
+		return {"R": -5, "msg": "Extensión no permitida"}
+	# 🔒 FIX A04: validar tamaño del archivo (base64)
+	try:
+		data_b64 = request.json['data']
+		data_bytes = base64.b64decode(data_b64, validate=True)
+	except Exception:
+		return {"R": -6, "msg": "Datos base64 inválidos"}
+
+	if len(data_bytes) > 5 * 1024 * 1024:  # 5 MB
+		return {"R": -7, "msg": "Archivo demasiado grande"}
+
+	# 🔒 FIX A04: verificar tipo MIME (solo imágenes)
+	tmp_name = secrets.token_hex(8)
+	tmp_path = tmp / tmp_name
+	with open(tmp_path, "wb") as imagen:
+		imagen.write(data_bytes)
+	tipo = imghdr.what(tmp_path)
+	if tipo not in ext_permitidas:
+		tmp_path.unlink(missing_ok=True)
+		return {"R": -8, "msg": "Tipo de archivo no válido"}
 	
 	############################
 	############################
@@ -248,11 +274,12 @@ def Imagen():
 			R = cursor.fetchall()
 			idImagen = R[0][0];
 			# 🔒 FIX A03: actualizar ruta usando parámetros (evitar concatenación en SQL)
-			new_ruta = "img/" + str(idImagen) + "." + str(request.json['ext'])
+			new_ruta = f"img/{idImagen}.{ext}"
 			cursor.execute("UPDATE Imagen SET ruta = %s WHERE id = %s", (new_ruta, idImagen))
 			db.commit()
-			# Mover archivo a su nueva locacion
-			shutil.move('tmp/'+str(id_Usuario),'img/'+str(idImagen)+'.'+str(request.json['ext']))
+			# 🔒 FIX A04: mover archivo de forma segura
+			final_path = img / f"{idImagen}.{ext}"
+			shutil.move(str(tmp_path), final_path)
 			return {"R":0,"D":idImagen}
 	except Exception as e: 
 		print(e)
@@ -327,8 +354,6 @@ def Descargar():
 			if not str(ruta).startswith(str(img_root)):
 				db.close()
 				return {"R": -10, "msg": "Ruta de imagen no permitida"}
-
-			print(Path("img").resolve(), ruta)
 			db.close()
 			return static_file(ruta.name, root=str(img_root))
 	except Exception as e: 
